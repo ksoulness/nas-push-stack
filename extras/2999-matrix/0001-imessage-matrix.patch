@@ -1,0 +1,133 @@
+--- a/universal-push-proxy.py
++++ b/universal-push-proxy.py
+@@ -69,6 +69,11 @@
+ ]
+ 
+ CHANNEL_ORDER = ["nas", "btc", "device", "horizon", "codex", "deepseek", "general", "textverified"]
++
++# iMessage 直发网关（NAS 自建，端口 8098，仅内网）；离线时矩阵该列显示 ✗
++IMESSAGE_URL = os.environ.get("IMESSAGE_URL", "http://192.168.1.10:8098")
++# 推送入口（3004，经 apprise 转发；矩阵里与其它列保持一致）
++HUB_URL = os.environ.get("PUSH_HUB_URL", "http://192.168.1.10:3004")
+ 
+ OK_RESPONSES = {
+     "wecom": {"errcode": 0, "errmsg": "ok"},
+@@ -270,6 +275,49 @@
+     }
+ 
+ 
++def _cell_imessage(key, gw_cell=None):
++    """iMessage 频道的调用方式。
++
++    与其它列一致：公式/Bearer/飞书走 3004（3004 → apprise `json://` → 网关 8098）；
++    另附 `direct` 给出 8098 直连公式（绕过 apprise，少一跳）。
++    """
++    c = dict(gw_cell or {})
++    base = IMESSAGE_URL.rstrip("/")
++    hub = HUB_URL.rstrip("/")
++    feishu = f"{hub}/feishu/{key}"
++    return {
++        "ok": True,
++        "key": key,
++        "target": c.get("target", ""),
++        "backend": c.get("backend", ""),
++        "formula": f'curl -G "{hub}/push/{key}" --data-urlencode "title=标题" '
++                   f'--data-urlencode "body=内容"',
++        "bearer": f'curl -X POST -H "Authorization: Bearer {key}" '
++                  f'-d \'{{"title":"标题","content":"内容"}}\' {hub}/api/push',
++        "apprise": f"POST http://192.168.1.10:8000/notify/{key}",
++        "feishu_pub": feishu,
++        "feishu_lan": feishu,
++        "direct": c.get("formula") or f'curl -G "{base}/push/{key}" '
++                                      f'--data-urlencode "title=标题" --data-urlencode "body=内容"',
++        "sms_hook": c.get("sms_hook") or f"POST {base}/hook/imessage (HMAC)",
++    }
++
++
++def _imessage_cells():
++    """从 iMessage 网关的 /matrix.json 取 频道→调用方式；网关离线时返回空（不阻塞 2999）。"""
++    try:
++        with urllib.request.urlopen(IMESSAGE_URL.rstrip("/") + "/matrix.json", timeout=3) as r:
++            data = json.loads(r.read().decode("utf-8"))
++    except Exception:
++        return {}
++    out = {}
++    for row in data.get("channels") or []:
++        cell = row.get("imessage") or {}
++        if cell.get("ok") and cell.get("key"):
++            out[row.get("channel") or cell["key"]] = _cell_imessage(cell["key"], cell)
++    return out
++
++
+ def matrix_data():
+     """Build the channel x device routing matrix from live config state."""
+     keys = _read_cfg_keys()
+@@ -280,13 +328,17 @@
+     for k in keys:
+         if k.startswith("ha_"):
+             continue  # HA switch keys live in their own table
+-        for p in ("gotify_", "bark_", "telegram_", "discord_"):
++        for p in ("gotify_", "bark_", "telegram_", "discord_", "imessage_"):
+             if k.startswith(p):
+                 channels.setdefault(k[len(p):], {})
+                 break
+         else:
+             # unprefixed keys (e.g. textverified) form their own channel
+             channels.setdefault(k, {})
++
++    im_cells = _imessage_cells()
++    for ch in im_cells:
++        channels.setdefault(ch, {})
+ 
+     def sort_key(name):
+         return (CHANNEL_ORDER.index(name) if name in CHANNEL_ORDER else 99, name)
+@@ -338,6 +390,8 @@
+             }
+         else:
+             row["discord"] = {"ok": False}
++
++        row["imessage"] = im_cells.get(ch, {"ok": False})
+ 
+         rows.append(row)
+ 
+@@ -739,7 +793,8 @@
+ <table id="mt"><thead><tr><th>频道</th><th>bark<br><span style="font-weight:400;font-size:11px">iPad</span></th>
+ <th>gotify<br><span style="font-weight:400;font-size:11px">安卓 ACE</span></th>
+ <th>telegram<br><span style="font-weight:400;font-size:11px">TG topic</span></th>
+-<th>discord<br><span style="font-weight:400;font-size:11px">频道 webhook</span></th></tr></thead><tbody></tbody></table>
++<th>discord<br><span style="font-weight:400;font-size:11px">频道 webhook</span></th>
++<th>imessage<br><span style="font-weight:400;font-size:11px">NAS 直发 8098</span></th></tr></thead><tbody></tbody></table>
+ 
+ 
+ <div class="note">
+@@ -803,12 +858,20 @@
+    h+=block('推送公式（经桥转发到 TG）',cell.formula);
+    h+=`<div class="lbl">TG chat ${cell.chat_id}${cell.topic_id?' / topic '+cell.topic_id:'（General）'}</div>`;
+    h+=block('TG 直推（webhook 方式，token 已掩码）',cell.direct);}
++  else if(c==='imessage'){
++   h+=`<div class="lbl">目标 ${cell.target||'—'} · 后端 ${cell.backend||'—'}</div>`;
++   h+=block('推送公式（8098，直发 iMessage）',cell.formula);
++   h+=block('MagicPush Bearer',cell.bearer);
++   h+=block('Apprise 兼容',cell.apprise);
++   h+=block('SmsForwarder 短信钩子（HMAC 签名）',cell.sms_hook);
++   h+=block('8098 直连（绕过 apprise）',cell.direct);}
+   else{
+    h+=block('推送公式（经桥转发到 Discord）',cell.formula);
+    h+=`<div class="lbl">webhook ${cell.webhook_id}</div>`;
+    h+=block('Discord 直推 webhook（token 已掩码）',cell.direct);}
++   if(c!=='imessage'){
+    h+=block('飞书兼容 webhook（公网，可填 VPS 等外部系统）',cell.feishu_pub);
+-   h+=block('飞书兼容 webhook（内网）',cell.feishu_lan);
++   h+=block('飞书兼容 webhook（内网）',cell.feishu_lan);}
+  }else{
+   h+=`<div class="lbl">未配置该发送方式</div>`;
+   if(c==='telegram'||c==='discord')h+=`<div class="lbl">在 TG / Discord 里新建频道后把 topic ID / webhook URL 告知即可接入</div>`;
+@@ -822,7 +885,7 @@
+  for(const r of d.channels){
+   const tr=document.createElement('tr');
+   tr.innerHTML=`<td class="ch">${r.channel}</td>`+
+-   ['bark','gotify','telegram','discord'].map(c=>
++   ['bark','gotify','telegram','discord','imessage'].map(c=>
+     `<td class="${r[c].ok?'yes':'no'}" onclick='show(M.channels[${d.channels.indexOf(r)}],"${c}")'>${r[c].ok?'✓':'✗'}</td>`
+    ).join('');
+   tb.appendChild(tr);

@@ -47,6 +47,8 @@ SmsForwarder ─┐
 │   ├── iMessage短信转发通道.md     使用文档（SmsForwarder 配置、5 种推送方言、排错）
 │   └── iMessage网关-经验与踩坑.md  ★ 方法论：根因、弯路、红线、重建清单
 └── tests/                      端到端验证脚本（见下）
+├── extras/2999-matrix/         把 iMessage 接进自己的推送控制台（页面矩阵列）的补丁与说明
+└── docs/upstream/              上游推送中枢的原始运行手册（脱敏版）：概览 / 备份恢复 / 迁移方案
 ```
 
 ---
@@ -175,5 +177,5 @@ SmsForwarder → 自定义 Webhook：
 - NAC 模拟思路：`open-absinthe` / `JJTech0130/nacserver`
 - 推送中枢：[Apprise](https://github.com/caronc/apprise)、Hotify 控制台、[Bark](https://github.com/Finb/bark-server)
 
-**本仓库自身代码暂未选择开源许可（All rights reserved）**；`gateway.py` 与 `tests/` 可自由用于自建部署。
-仓库不含任何 Apple 二进制，也不含任何第三方源码副本。
+**本仓库自身代码以 MIT 许可发布**（见 [LICENSE](LICENSE)）；仓库不含任何 Apple 二进制，也不含任何第三方源码副本。
+`docs/upstream/` 下的原始运行手册同样按 MIT 发布，其中的 IP / 路径 / 域名均为占位值。
