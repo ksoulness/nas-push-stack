@@ -2,7 +2,9 @@
 
 自建推送栈：**一个 HTTP webhook 入口，多通道投递**。
 同一条消息可以落到 **真 iMessage**、Bark、gotify、Telegram、Discord，也可以走
-**企业微信 / 钉钉 / 飞书 / PushPlus**，以及**任意 Apprise 支持的服务**（100+）。
+**企业微信 / 钉钉 / 飞书 / PushPlus**，以及**任意 Apprise 通道**——容器内实装 **145 个**：
+Slack、SMTP 邮件、Matrix、ntfy、PushDeer、Pushover、Twilio 短信、PagerDuty、MQTT……
+（[完整清单见 §2.1.1](#211-apprise-全量通道容器内-apprise-1120共-145-个)）
 
 其中 iMessage 是最"难"的那条通道——不需要把 Mac 常开，也不需要 BlueBubbles / osascript，
 消息由一台 Linux 服务器直接发到 Apple 网络。
@@ -13,7 +15,7 @@
 | --- | --- | --- | --- |
 | 📨 **iMessage**（真·iMessage） | 📱 **Bark**（iPhone/iPad） | 🤖 **gotify**（安卓） | ✈️ **Telegram** |
 | 🎮 **Discord** | 💼 **企业微信** | 📌 **钉钉** | 🕊 **飞书** |
-| 📮 **PushPlus**（微信） | 🔌 **任意 Apprise 目标**（Slack/SMTP/Matrix/ntfy/PushDeer/Pushover…） | | |
+| 📮 **PushPlus**（微信） | 🔌 **任意 Apprise 通道**（145 个，见 §2.1.1） | | |
 
 > 仅用于自用与通知。涉及 Apple 私有 API，非官方支持，**可能触发账号风控**，风险自担。
 
@@ -53,12 +55,60 @@
 | **钉钉** | 方言层 `/dingtalk/<key>` + Apprise 键 | `POST /dingtalk/<key>` | 兼容钉钉 markdown 体（`{msgtype:"markdown",markdown:{title,text}}`） |
 | **飞书 / Lark** | 方言层 `/feishu/<key>`；iMessage 网关也直吃 | `POST /feishu/<key>` | `{"msg_type":"text","content":{"text":"…"}}` |
 | **PushPlus** | 方言层 `/pushplus/<key>` + Apprise 键 | `POST /pushplus/<key>` | 微信推送 |
-| **任意 Apprise 目标** | Apprise（100+ 服务） | `POST /notify/<key>` | 该键的 `.cfg` 里挂什么就投什么：Slack、SMTP 邮件、Matrix、ntfy、PushDeer、Pushover、Mattermost… |
+| **任意 Apprise 目标（145 个，见 2.1.1）** | Apprise（容器内 1.12.0） | `POST /notify/<key>` | 该键的 `.cfg` 里挂什么就投什么；完整清单见下一节 |
 | **短信转发入口** | 本仓库网关 | `POST /hook/imessage` | 安卓 SmsForwarder 报文（HMAC 签名），专门给短信设计 |
 
 > 关键设计：**通道由 Apprise 的"键"决定，不由 URL 决定**。一个键的配置文件里挂企业微信机器人，
 > 这个键就是企业微信通道；挂飞书机器人就是飞书通道；同时挂几个就是扇出到多处。
 > 所以"新增一个通道"通常只是**加一个配置文件**，不用改代码 —— 详细见 [docs/upstream/notification-system.md](docs/upstream/notification-system.md)。
+
+#### 2.1.1 Apprise 全量通道（容器内 `apprise 1.12.0`，共 145 个）
+
+下表由容器里跑 `apprise.Apprise().details()` 直接导出并按用途分组——**任意一个都能挂到 `/notify/<key>` 上**，
+也就是「加一个配置文件就多一条通道」，不需要改代码。
+
+**📱 手机 / 桌面 / 浏览器推送**（24）
+
+`Bark` · `Chanify` · `Firebase Cloud Messaging` · `Gotify` · `Join` · `Kumulos` · `Notica` · `NotificationAPI` · `ntfy` · `OneSignal` · `Parse Platform` · `Prowl` · `Pushbullet` · `PushDeer` · `Pushed` · `Pushjet` · `PushMe` · `Pushover` · `Pushsafer` · `PushWard` · `Pushy` · `SimplePush` · `Techulus Push` · `Vapid Web Push Notifications`
+
+**🇨🇳 国内生态（微信生态 / 企微 / 钉钉 / 飞书 / QQ）**（11）
+
+`DingTalk` · `Feishu` · `Kook` · `Lark (Feishu)` · `Pushplus` · `QQ Push` · `ServerChan` · `SpugPush` · `WeChat (WeCom)` · `WeCom Bot` · `WxPusher`
+
+**💬 聊天 / IM / 协作**（32）
+
+`Amazon Chime` · `Cisco Webex Teams` · `Discord` · `Evolution API` · `Flock` · `Google Chat` · `GroupMe` · `Guilded` · `HumHub` · `IRC` · `Jira` · `Line` · `Matrix` · `Mattermost` · `Nextcloud Talk` · `Power Automate / Workflows (for MSTeams)` · `Revolt` · `Rocket.Chat` · `Ryver` · `Session Open Group Server` · `Signal API` · `Slack` · `Stackfield` · `Synology Chat` · `Telegram` · `Threema Gateway` · `Twist` · `Viber` · `WhatsApp` · `XMPP` · `Zoom` · `Zulip`
+
+**✉️ 邮件**（12）
+
+`AWS Simple Email Service (SES)` · `Brevo` · `E-Mail` · `MailerSend` · `Mailgun` · `Office 365` · `Postmark` · `Resend` · `SendGrid` · `SendPulse` · `SMTP2Go` · `SparkPost`
+
+**📲 短信 / 语音 / 传真**（31）
+
+`46elks` · `800.com` · `Africas Talking` · `BulkSMS` · `BulkVS` · `Burst SMS` · `Clickatell` · `ClickSend` · `D7 Networks` · `Exotel` · `Flowtriq` · `Free-Mobile` · `httpSMS` · `Kavenegar` · `MessageBird` · `MSG91` · `Notifyre` · `Octopush` · `Plivo` · `RingCentral` · `SerwerSMS` · `seven` · `Sinch` · `SMPP` · `SMS Eagle` · `SMS Manager` · `SMSC` · `Société Française du Radiotéléphone` · `Twilio` · `VoIPms` · `Vonage`
+
+**🚨 值班 / 告警平台**（8）
+
+`Notifiarr` · `Opsgenie` · `Pager Duty` · `PagerTree` · `SIGNL4` · `Spike.sh` · `Splunk On-Call` · `Streamlabs`
+
+**🏠 智能家居 / 媒体 / IoT / 日志**（13）
+
+`Aprs` · `Dapnet` · `Emby` · `Enigma2` · `Growl` · `HomeAssistant` · `Jellyfin` · `Kodi/XBMC` · `LaMetric` · `MQTT Notification` · `Nextcloud` · `Remote Syslog` · `Syslog`
+
+**🌐 社交 / 自动化 / 通用 webhook**（10）
+
+`Apprise API` · `BlueSky` · `Form` · `IFTTT` · `JSON` · `Mastodon` · `Misskey` · `Reddit` · `Twitter` · `XML`
+
+**🧩 其它**（4）
+
+`AWS Simple Notification Service (SNS)` · `Dot.` · `Fluxer` · `Notifico`
+
+> 想看你自己那台机器支持哪些（版本不同会增减）：
+>
+> ```bash
+> docker exec apprise python3 -c "import apprise;d=apprise.Apprise().details();print(d['version'], len(d['schemas']));[print(str(s['service_name'])) for s in sorted(d['schemas'], key=lambda x: str(x['service_name']).lower())]"
+> ```
+
 
 ### 2.2 入口协议（谁把消息发进来）
 
