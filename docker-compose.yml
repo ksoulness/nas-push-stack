@@ -1,0 +1,112 @@
+services:
+  # ──────────────────────────────────────────────────────────────
+  # 上游推送中枢（Apprise + Hotify 控制台 + Bark 服务端）
+  # iMessage 只是这套体系新增的一个投递目标，可以按需裁剪。
+  # ──────────────────────────────────────────────────────────────
+  apprise:
+    image: caronc/apprise:latest
+    container_name: apprise
+    restart: unless-stopped
+    user: "1000:1001"
+    ports:
+      - "8000:8000"
+    environment:
+      APPRISE_STATEFUL_MODE: simple
+      APPRISE_WORKER_COUNT: "1"
+      APPRISE_ADMIN: "y"
+      TZ: ${TZ:-UTC}
+      # 可选：出站代理。若你有 mihomo/clash 之类的容器，取消注释并给 apprise 加外部网络
+      # HTTP_PROXY: http://mihomo:7890
+      # HTTPS_PROXY: http://mihomo:7890
+      NO_PROXY: localhost,127.0.0.1,::1,apprise,mihomo,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+    volumes:
+      - ./apprise/config:/config
+      - ./apprise/plugin:/plugin
+      - ./apprise/attach:/attach
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+  hotify:
+    image: hotify-server:latest        # ← 换成你自己的镜像地址
+    container_name: hotify
+    restart: unless-stopped
+    ports:
+      - "8002:8443"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./hotify/data:/data
+
+  bark-server:
+    image: finab/bark-server
+    container_name: bark-server
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./bark/data:/data
+
+  # ──────────────────────────────────────────────────────────────
+  # iMessage 直发（本项目新增）
+  #   imessaged   : rustpush 引擎 + 本地 NAC 模拟，负责账号登录 / IDS 注册 / APNs
+  #   imessage-gw : 网关，负责验签 / 去重 / 持久队列 / 重试 + 5 种推送方言
+  #   详见 docs/ 与 imessage/BUILD.md
+  # ──────────────────────────────────────────────────────────────
+  imessaged:
+    build: ./imessage
+    image: imessage-linux:local
+    container_name: imessaged
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      TZ: ${TZ:-UTC}
+      IMESSAGED_STATE_DIR: /state
+      IMESSAGED_BUS_DIR: /bus
+      XDG_DATA_HOME: /apple-data
+      XDG_RUNTIME_DIR: /run/xdg
+      # 设备证明（anisette）由一台真 Mac 铸造；容器里只有受限 SSH 客户端配置
+      IMESSAGED_ANISETTE_COMMAND: "ssh -F /secrets/ssh_config anisette-host .local/bin/imessage-anisette"
+    volumes:
+      - ./imessage/state:/state                 # 会话/密钥/消息库：0700，禁止入库
+      - ./imessage/bus:/bus                     # 跨容器 session bus socket
+      - ./imessage/apple-data:/apple-data:ro    # Apple 两个文件，自行准备（见 BUILD.md）
+      - ${SECRETS_DIR:-./secrets}:/secrets:ro   # SSH 私钥 + ssh_config + known_hosts
+    read_only: true
+    tmpfs:
+      - /run:size=8m,mode=1777                  # dbus 需要可写且 1777
+      - /tmp:size=8m,mode=1777
+    mem_limit: 320m
+    memswap_limit: 320m
+    cpus: 0.50
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  imessage-gw:
+    build:
+      context: ./imessage
+      dockerfile: gw/Dockerfile
+    image: imessage-gw:local
+    container_name: imessage-gw-svc
+    restart: unless-stopped
+    user: "10001:10001"
+    env_file:
+      - ./imessage/gw/gw.env                    # 由 gw.env.example 复制后填入自己的密钥
+    environment:
+      TZ: ${TZ:-UTC}
+    volumes:
+      - ./imessage/gw/data:/data                # SQLite 队列
+      - ./imessage/bus:/bus
+    ports:
+      # 默认只绑本机；要让局域网设备访问，设 GW_BIND=0.0.0.0
+      - "${GW_BIND:-127.0.0.1}:8098:8099"
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.50
+    pids_limit: 64
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true

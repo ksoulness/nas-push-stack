@@ -1,0 +1,49 @@
+# 依赖/密钥/运行数据 —— 一律不入库
+_*temp*/
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.enc
+*.key
+*.plist
+.env
+*.env
+!*.env.example
+
+# iMessage 运行时（含等价密码，绝不允许提交）
+imessage/state/
+imessage/bus/
+imessage/gw/data/
+imessage/apple-data/
+imessage/bin/
+
+# SSH 材料
+secrets/
+**/known_hosts
+**/id_ed25519*
+
+# Apprise 配置（每个 .cfg 里都是 token / webhook）
+apprise/config/
+apprise/plugin/
+apprise/attach/
+
+# 数据与日志目录
+bark/
+gotify/
+hotify/
+bridge/
+magicpush-bridge/
+*.bak-*
+
+# 脱敏工作区
+_raw/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 本地敏感清单（PRIVACY.md 里的自检用）
+.private/
