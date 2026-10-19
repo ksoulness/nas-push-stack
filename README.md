@@ -53,7 +53,8 @@ Slack、SMTP 邮件、Matrix、ntfy、PushDeer、Pushover、Twilio 短信、Page
 | **Discord** | 桥进程（webhook）+ Apprise | `/push/discord_<channel>` | 可指定频道 webhook |
 | **企业微信** | 方言层 `/wecom/<key>` + Apprise 键 | `POST /wecom/<key>` | 收企业微信机器人报文形态，转成 Apprise 投递 |
 | **钉钉** | 方言层 `/dingtalk/<key>` + Apprise 键 | `POST /dingtalk/<key>` | 兼容钉钉 markdown 体（`{msgtype:"markdown",markdown:{title,text}}`） |
-| **飞书 / Lark** | 方言层 `/feishu/<key>`；iMessage 网关也直吃 | `POST /feishu/<key>` | `{"msg_type":"text","content":{"text":"…"}}` |
+| **飞书 / Lark** | 方言层 `/feishu/<key>`；iMessage 网关也直吃 | `POST /feishu/<key>` | `{"msg_type":"text","content":{"text":"…"}}`（**入站**：别人以飞书格式推给我们） |
+| **飞书群（出站）** | 推送脚本自带的出站腿（第 5 口 `:3806`） | `POST /push/feishu_<channel>` | 直投自建应用机器人的群，消息首行固定 `[频道: <channel>]`；Apprise 无飞书插件故自带一腿，接入见 [`extras/2999-matrix/0002-feishu-leg.patch`](extras/2999-matrix/) |
 | **PushPlus** | 方言层 `/pushplus/<key>` + Apprise 键 | `POST /pushplus/<key>` | 微信推送 |
 | **任意 Apprise 目标（145 个，见 2.1.1）** | Apprise（容器内 1.12.0） | `POST /notify/<key>` | 该键的 `.cfg` 里挂什么就投什么；完整清单见下一节 |
 | **短信转发入口** | 本仓库网关 | `POST /hook/imessage` | 安卓 SmsForwarder 报文（HMAC 签名），专门给短信设计 |

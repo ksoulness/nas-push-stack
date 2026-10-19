@@ -1,0 +1,268 @@
+--- a/universal-push-proxy.py
++++ b/universal-push-proxy.py
+@@ -31,6 +31,11 @@ Routes (PAGE port):
+                             (server-side proxy with key1 from bridge config; the
+                             token never reaches the browser)
+ 
++Routes (FEISHU-OUT port, default 3806, LAN only; apprise json:// legs):
++  POST /feishu_<channel>    {"title","message"} -> Feishu group text message
++                            (first line forced to "[频道: <channel>] <title>";
++                            creds from /srv/push/feishu.env)
++
+ Bark 参数透传（2026-10-06）：/push/<key>、/notify/<key>、/api/push 上附带
+ level / sound / group / badge / volume / call / isArchive / url / copy /
+ autoCopy / subtitle / icon / action / ttl 时，若该键是 bark 腿则绕过 apprise
+@@ -50,6 +55,7 @@ import os
+ import re
+ import sys
+ import threading
++import time
+ import urllib.error
+ import urllib.parse
+ import urllib.request
+@@ -75,6 +81,11 @@ IMESSAGE_URL = os.environ.get("IMESSAGE_URL", "http://192.168.1.10:8098")
+ # 推送入口（3004，经 apprise 转发；矩阵里与其它列保持一致）
+ HUB_URL = os.environ.get("PUSH_HUB_URL", "http://192.168.1.10:3004")
+ 
++# 飞书出站（2026-10-19）：apprise json:// 腿 → 本进程第 5 口 → 飞书开放平台。
++# 与「飞书兼容 webhook」(/feishu/<key>，入站方言，别人以飞书格式推给我们)方向相反，勿混。
++FEISHU_CRED = os.environ.get("FEISHU_CRED", "/srv/push/feishu.env")
++FEISHU_API = "https://open.feishu.cn/open-apis"
++
+ OK_RESPONSES = {
+     "wecom": {"errcode": 0, "errmsg": "ok"},
+     "dingtalk": {"errcode": 0, "errmsg": "ok"},
+@@ -275,6 +286,15 @@ def _cell(kind, key):
+     }
+ 
+ 
++def _cell_feishu(key):
++    """飞书出站列：与其它列同形，额外给出目标群 chat_id（不是密钥，可直接显示）。"""
++    cell = _cell("feishu", key)
++    creds = _feishu_creds()
++    cell["chat_id"] = creds.get("FEISHU_CHAT_ID", "")
++    cell["group"] = creds.get("FEISHU_GROUP_NAME", "")
++    return cell
++
++
+ def _cell_imessage(key, gw_cell=None):
+     """iMessage 频道的调用方式。
+ 
+@@ -328,7 +348,7 @@ def matrix_data():
+     for k in keys:
+         if k.startswith("ha_"):
+             continue  # HA switch keys live in their own table
+-        for p in ("gotify_", "bark_", "telegram_", "discord_", "imessage_"):
++        for p in ("gotify_", "bark_", "telegram_", "discord_", "imessage_", "feishu_"):
+             if k.startswith(p):
+                 channels.setdefault(k[len(p):], {})
+                 break
+@@ -393,6 +413,9 @@ def matrix_data():
+ 
+         row["imessage"] = im_cells.get(ch, {"ok": False})
+ 
++        feishu_key = f"feishu_{ch}" if f"feishu_{ch}" in keys else None
++        row["feishu"] = _cell_feishu(feishu_key) if feishu_key else {"ok": False}
++
+         rows.append(row)
+ 
+     return {"channels": rows}
+@@ -794,7 +817,8 @@ border-radius:8px;padding:10px 13px;margin-top:9px}
+ <th>gotify<br><span style="font-weight:400;font-size:11px">安卓 ACE</span></th>
+ <th>telegram<br><span style="font-weight:400;font-size:11px">TG topic</span></th>
+ <th>discord<br><span style="font-weight:400;font-size:11px">频道 webhook</span></th>
+-<th>imessage<br><span style="font-weight:400;font-size:11px">NAS 直发 8098</span></th></tr></thead><tbody></tbody></table>
++<th>imessage<br><span style="font-weight:400;font-size:11px">NAS 直发 8098</span></th>
++<th>feishu<br><span style="font-weight:400;font-size:11px">飞书群 通知中心</span></th></tr></thead><tbody></tbody></table>
+ 
+ 
+ <div class="note">
+@@ -865,11 +889,18 @@ function show(r,c){
+    h+=block('Apprise 兼容',cell.apprise);
+    h+=block('SmsForwarder 短信钩子（HMAC 签名）',cell.sms_hook);
+    h+=block('8098 直连（绕过 apprise）',cell.direct);}
++  else if(c==='feishu'){
++   h+=`<div class="lbl">出站到飞书群 ${cell.group||''}（chat ${cell.chat_id||'—'}）· 首行固定 [频道: ${r.channel}]</div>`;
++   h+=block('推送公式（3004，带 [key] 前缀）',cell.formula);
++   h+=block('MagicPush Bearer',cell.bearer);
++   h+=block('直达 apprise（无前缀）',cell.apprise);
++   h+=block('飞书兼容入站 webhook（公网 · 反向：别人以飞书格式推给我们）',cell.feishu_pub);
++   h+=block('飞书兼容入站 webhook（内网 · 同上）',cell.feishu_lan);}
+   else{
+    h+=block('推送公式（经桥转发到 Discord）',cell.formula);
+    h+=`<div class="lbl">webhook ${cell.webhook_id}</div>`;
+    h+=block('Discord 直推 webhook（token 已掩码）',cell.direct);}
+-   if(c!=='imessage'){
++   if(c!=='imessage'&&c!=='feishu'){
+    h+=block('飞书兼容 webhook（公网，可填 VPS 等外部系统）',cell.feishu_pub);
+    h+=block('飞书兼容 webhook（内网）',cell.feishu_lan);}
+  }else{
+@@ -885,7 +916,7 @@ function render(d){
+  for(const r of d.channels){
+   const tr=document.createElement('tr');
+   tr.innerHTML=`<td class="ch">${r.channel}</td>`+
+-   ['bark','gotify','telegram','discord','imessage'].map(c=>
++   ['bark','gotify','telegram','discord','imessage','feishu'].map(c=>
+     `<td class="${r[c].ok?'yes':'no'}" onclick='show(M.channels[${d.channels.indexOf(r)}],"${c}")'>${r[c].ok?'✓':'✗'}</td>`
+    ).join('');
+   tb.appendChild(tr);
+@@ -1737,11 +1768,142 @@ class RelayHandler(Handler):
+     do_GET = _relay
+ 
+ 
++# --------------------------------------------------- 飞书出站（2026-10-19）
++# apprise 没有飞书插件，出站腿只能自己做：每个频道一个 cfg 腿
++#   json://192.168.1.10:3806/feishu_<频道>
++# 端口必须用宿主 LAN IP 而不是 127.0.0.1——apprise 跑在容器里
++# （net=clash，与宿主不共享 loopback），127.0.0.1 会打到容器自己身上。
++# 端口选 3806 而非 3006：30xx 段被 docker publish 占用/争用，实测 3006-3010
++# 全被 docker-proxy 监听（2026-10-19 首轮部署因此崩过一次）。
++# apprise POST {"title":…,"message":…} 到本口，这里改投飞书 im/v1/messages。
++# 消息首行固定 "[频道: <频道>] <标题>"，满足「每条都能看出属于哪个频道」。
++_FEISHU_TOKEN = {"token": "", "exp": 0.0}
++_FEISHU_LOCK = threading.Lock()
++
++
++def _feishu_creds():
++    """读 feishu.env（逐行 KEY=VALUE）；文件缺失/不可读时返回 {}。"""
++    out = {}
++    try:
++        with open(FEISHU_CRED, encoding="utf-8") as f:
++            for line in f:
++                line = line.strip()
++                if not line or line.startswith("#") or "=" not in line:
++                    continue
++                k, v = line.split("=", 1)
++                out[k.strip()] = v.strip().strip('"').strip("'")
++    except OSError:
++        return {}
++    return out
++
++
++def _feishu_token(creds):
++    """tenant_access_token，进程内缓存，到期前 60s 刷新。"""
++    now = time.time()
++    with _FEISHU_LOCK:
++        if _FEISHU_TOKEN["token"] and _FEISHU_TOKEN["exp"] > now + 60:
++            return _FEISHU_TOKEN["token"]
++        body = json.dumps({"app_id": creds.get("FEISHU_APP_ID", ""),
++                           "app_secret": creds.get("FEISHU_APP_SECRET", "")}).encode()
++        req = urllib.request.Request(
++            FEISHU_API + "/auth/v3/tenant_access_token/internal", data=body,
++            method="POST", headers={"Content-Type": "application/json; charset=utf-8"})
++        with urllib.request.urlopen(req, timeout=10) as r:
++            d = json.loads(r.read().decode("utf-8", "replace") or "{}")
++        if d.get("code") != 0 or not d.get("tenant_access_token"):
++            raise RuntimeError(f"feishu token failed: {d.get('code')} {d.get('msg')}")
++        _FEISHU_TOKEN["token"] = d["tenant_access_token"]
++        _FEISHU_TOKEN["exp"] = now + int(d.get("expire") or 7200)
++        return _FEISHU_TOKEN["token"]
++
++
++def _feishu_text(channel, title, body):
++    """首行固定带频道名；剥掉 3004 已加的 [key] 前缀以免重复。"""
++    head = f"[频道: {channel or 'unknown'}]"
++    t = (title or "").strip()
++    m = re.match(r"^\[[^\]]{1,40}\]\s*", t)
++    if m:
++        t = t[m.end():].strip()
++    if t:
++        head += " " + t
++    body = (body or "").strip()
++    return head + (("\n" + body) if body else "")
++
++
++def _feishu_send(creds, channel, title, body):
++    chat_id = creds.get("FEISHU_CHAT_ID", "")
++    if not chat_id:
++        raise RuntimeError("feishu.env 缺 FEISHU_CHAT_ID")
++    tok = _feishu_token(creds)
++    payload = {"receive_id": chat_id, "msg_type": "text",
++               "content": json.dumps({"text": _feishu_text(channel, title, body)},
++                                     ensure_ascii=False)}
++    req = urllib.request.Request(
++        FEISHU_API + "/im/v1/messages?receive_id_type=chat_id",
++        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
++        method="POST",
++        headers={"Content-Type": "application/json; charset=utf-8",
++                 "Authorization": f"Bearer {tok}"})
++    with urllib.request.urlopen(req, timeout=10) as r:
++        d = json.loads(r.read().decode("utf-8", "replace") or "{}")
++    if d.get("code") != 0:
++        raise RuntimeError(f"feishu send failed: {d.get('code')} {d.get('msg')}")
++    return (d.get("data") or {}).get("message_id", "")
++
++
++class FeishuOutHandler(Handler):
++    """第 5 口：apprise json:// 腿 → 飞书群消息（首行带频道名）。"""
++
++    ROLE = "feishu-out"
++
++    def _channel(self):
++        parts = [p for p in self.path.split("?")[0].split("/") if p]
++        name = parts[-1] if parts else ""
++        return name[len("feishu_"):] if name.startswith("feishu_") else name
++
++    def _feishu_out(self):
++        if self.path.split("?")[0] in ("/health", "/healthz"):
++            self._reply_json({"status": "ok"})
++            return
++        try:
++            n = int(self.headers.get("Content-Length") or 0)
++            raw = self.rfile.read(n) if n else b""
++            ct = (self.headers.get("Content-Type") or "").lower()
++            payload = {}
++            if raw:
++                if "json" in ct:
++                    payload = json.loads(raw.decode("utf-8", "replace") or "{}")
++                elif "form" in ct or not ct:
++                    payload = {k: v[0] for k, v in urllib.parse.parse_qs(
++                        raw.decode("utf-8", "replace")).items()}
++            qs = (urllib.parse.parse_qs(self.path.split("?", 1)[1])
++                  if "?" in self.path else {})
++            title = payload.get("title") or (qs.get("title") or [""])[0]
++            body = (payload.get("message") or payload.get("body")
++                    or (qs.get("body") or qs.get("content") or [""])[0])
++            if isinstance(body, (list, tuple)):
++                body = "\n".join(str(x) for x in body)
++            creds = _feishu_creds()
++            if not creds:
++                raise RuntimeError(f"缺凭据文件 {FEISHU_CRED}")
++            ch = self._channel()
++            mid = _feishu_send(creds, ch, title, str(body or ""))
++            print(f"[feishu] sent channel={ch} message_id={mid}", flush=True)
++            self._reply_json({"code": 0, "msg": "ok", "message_id": mid})
++        except Exception as e:  # 绝不挂住 apprise
++            print(f"[feishu] err {self.path}: {e}", flush=True)
++            self._reply_json({"code": 502, "msg": f"feishu error: {e}"}, 502)
++
++    do_POST = _feishu_out
++    do_GET = _feishu_out
++
++
+ if __name__ == "__main__":
+     push_port = int(sys.argv[1]) if len(sys.argv) > 1 else 3004
+     page_port = int(sys.argv[2]) if len(sys.argv) > 2 else 2999
+     ace_port = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+     relay_port = int(sys.argv[4]) if len(sys.argv) > 4 else 0
++    feishu_port = int(sys.argv[5]) if len(sys.argv) > 5 else 0
+     push_srv = ThreadingHTTPServer(("0.0.0.0", push_port), PushHandler)
+     page_srv = ThreadingHTTPServer(("0.0.0.0", page_port), PageHandler)
+     threading.Thread(target=push_srv.serve_forever, daemon=True).start()
+@@ -1752,11 +1914,16 @@ if __name__ == "__main__":
+     if relay_port:
+         relay_srv = ThreadingHTTPServer(("0.0.0.0", relay_port), RelayHandler)
+         threading.Thread(target=relay_srv.serve_forever, daemon=True).start()
++    if feishu_port:
++        feishu_srv = ThreadingHTTPServer(("0.0.0.0", feishu_port), FeishuOutHandler)
++        threading.Thread(target=feishu_srv.serve_forever, daemon=True).start()
+     roles = [f"push :{push_port}", f"page :{page_port}"]
+     if ace_port:
+         roles.append(f"ace-filter :{ace_port}")
+     if relay_port:
+         roles.append(f"body-relay :{relay_port}")
++    if feishu_port:
++        roles.append(f"feishu-out :{feishu_port}")
+     print(" / ".join(roles), flush=True)
+     threading.Thread(target=page_srv.serve_forever, daemon=True).start()
+     page_srv.serve_forever()

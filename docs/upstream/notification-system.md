@@ -1,9 +1,7 @@
-> **脱敏说明**：本文是原运行手册的公开版，内网 IP、宿主路径、域名、主机名均已替换为占位值（`192.168.1.x` / `/srv/...` / `example.com`）。渠道名（nas/btc/device/general/mp…）保留，它们是逻辑标签而非身份信息。凭据一律以 `<key>`、`<KEY>` 形式出现。
-
 # 通知系统运行手册
 
-> 建立时间：2026-08-21 · **终态重写：2026-09-09 22:15** · **更新：2026-09-10 02:00**（端口拆分 + 文档标签页 + 成对双投修复）· **更新：2026-09-10 09:50**（H6 渠道分离：一键=一渠道，全部定向）· **更新：2026-10-09 19:30**（hideck 短信通知正文行序重排：内容置顶 → §19）
-> 涉及服务：Hotify、Apprise、3004 翻译器（2999 展示端口）、push-bridge、Home Assistant、Telegram、Discord
+> 建立时间：2026-08-21 · **终态重写：2026-09-09 22:15** · **更新：2026-09-10 02:00**（端口拆分 + 文档标签页 + 成对双投修复）· **更新：2026-09-10 09:50**（H6 渠道分离：一键=一渠道，全部定向）· **更新：2026-10-09 19:30**（hideck 短信通知正文行序重排：内容置顶 → §19）· **更新：2026-10-19 15:40**（新增飞书出站腿：12 频道 × 飞书群「通知中心」 → §20）
+> 涉及服务：Hotify、Apprise、3004 翻译器（2999 展示端口、3806 飞书出站端口）、push-bridge、Home Assistant、Telegram、Discord、飞书（小鲸应用）
 > 退役服务（回滚锚点见 §10）：Gotify 8081、Bark 8082、MagicPush 桥 8001、App Center hotify
 
 ---
@@ -52,7 +50,7 @@ Home Assistant（4 开关，H7 起直接引用 device 行四渠道，地址定�
 |-----|----------|---------|------|
 | Hotify | :8002 容器 | `curl :8002/ping` → pong | docker `hotify` |
 | Apprise API | :8000 容器 | `curl :8000/status` → OK | docker `apprise` |
-| 3004 翻译器 | :3004 推送（公网映射）+ :2999 展示（仅内网）+ :8003 安卓过滤代理 + :3005 apprise→Hotify 正文重映射中继 同进程 | `curl :3004/health` / `curl :2999/health` / `curl :8003/health` / `curl :3005/health` → ok | `push-translator.service`（ExecStart 四端口 `3004 2999 8003 3005`） |
+| 3004 翻译器 | :3004 推送（公网映射）+ :2999 展示（仅内网）+ :8003 安卓过滤代理 + :3005 apprise→Hotify 正文重映射中继 + :3806 飞书出站 同进程 | `curl :3004/health` / `curl :2999/health` / `curl :8003/health` / `curl :3005/health` / `curl :3806/health` → ok | `push-translator.service`（ExecStart 五端口 `3004 2999 8003 3005 3806`） |
 | push-bridge | systemd 无端口 | `systemctl status push-bridge` | `push-bridge.service` |
 | mihomo 代理 | :7890 容器 | 桥日志无连接错误即可 | docker `mihomo` |
 
@@ -208,12 +206,12 @@ cp /srv/push/apprise/backups/retired-legs-bridge-20260909/*.cfg /srv/push/appris
 ## 12. 已知事项与待决
 
 - **全量备份（2026-09-10 15:01，老大点名含全部敏感文件）**：`/srv/docker/backups/push-full-20260910-1457.tar.gz`（220KB/84 文件，root 700）——compose+21 cfg（含 token）+代理三端口源码+图标+hotify.db（设备注册表）+桥 config.json（TG/DC token）+2 systemd 单元；恢复手册=`docs\runbooks\push-backup-restore.md`（同步 NAS `…/apprise/docs/`，2999 文档标签可见）。同轮删除 9 项旧 push 备份（内容全被新全量覆盖，含 retired-legs-20260909）；保留 ha-config-pre-notify-update（HA 侧非 push）
-- **成对双投已修复（2026-09-10 02:00，方案 C：发送端改单键）**：①horizon compose `HORIZON_WEBHOOK_URLS` 原为 `bark_horizon||gotify_horizon` 双推 → 改单 URL `http://push.example.com:3004/feishu/gotify_horizon`（容器当前未运行，下次启动即单份）；②VPS `/srv/app/polymarket/ledger/persistent/config/webhook-config.json` 原有 discord（bark_btc）+webhook（gotify_btc）双通道 → `discord.enabled=false` 仅保留 gotify_btc。双端各 2 份 → 各 1 份；历史双推证据=Horizon 日报/btc 报告曾同秒成对落 Hotify
+- **成对双投已修复（2026-09-10 02:00，方案 C：发送端改单键）**：①horizon compose `HORIZON_WEBHOOK_URLS` 原为 `bark_horizon||gotify_horizon` 双推 → 改单 URL `http://push.example.com:3004/feishu/gotify_horizon`（容器当前未运行，下次启动即单份）；②VPS `/home/pm/polymarket/ledger/persistent/config/webhook-config.json` 原有 discord（bark_btc）+webhook（gotify_btc）双通道 → `discord.enabled=false` 仅保留 gotify_btc。双端各 2 份 → 各 1 份；历史双推证据=Horizon 日报/btc 报告曾同秒成对落 Hotify
 - **H6 渠道分离（2026-09-10 09:50，老大晨间需求：一键=一渠道、地址唯一、互不干涉）**：广播架构退役——apprise 25 键全部定向化。`gotify_X`（6）→`json://…:8002/<ACE uuid>`（仅安卓）；`bark_X`（7）→`json://…:8002/brak?-group=X`（仅 iPad，分组/铃声保留）；新增 `telegram_X`（4：nas/btc/device/general）→`…/tgram` + 桥路由 TG topic；新增 `discord_X`（3：nas/btc/device）→`…/discord` + 桥路由 DC 频道；textverified 去重留单广播腿（测试键，一键 iPad+安卓——桥无广播路由，TG/DC 不收，09-11 实测更正）。桥 routes 改造：telegram_*/discord_* 替代原 gotify_* 扇出（旧 gotify_nas/btc/device、bark_general 路由删除，ha_tgram/ha_discord 保留）。**发送端语义变化**：想多渠道就推多个键（每端恰好 1 份，成对推不再双投）；VPS/外部系统地址=飞书兼容 `http://push.example.com:3004/feishu/<key>`（公网）/`http://192.168.1.10:3004/feishu/<key>`（内网），2999 矩阵页点任意格子弹窗可复制全部地址形态。配对备份：`backups/cfg-bridge-pre-H6-20260910-0946.tar.gz`。验证：矩阵 8 行四列全对齐、四键实测各只到一端（桥日志 telegram_btc/discord_btc sent ok）、消息历史标注「定向：安卓 ACE/iPad Bark/TG topic N/Discord #X」
-- **H7 渠道分离收尾（2026-09-10 11:30，老大：ha_* 不需要、直接引用 device 四渠道；bark 只留一台 iPad；安卓串台处理）**：①`ha_android/ha_bark/ha_tgram/ha_discord` 四 cfg 删除、桥 routes 同步删（7 路：telegram_nas/btc/device/general + discord_nas/btc/device），HA 通知直接引用 `gotify_device/bark_device/telegram_device/discord_device`（地址定死，见 §4 HA 四渠道引用）；②未命名 bark 设备（uuid d694…，9/10 09:14 经公网 203.0.113.10 注册=老大 iPad 蜂窝网重注册）已删——10:40 全量巡检 7 条 bark 全走 ipad/brak 设备（✓apns 6127c36c），未命名设备零投递；③**Hotify gotify 兼容层缺陷**：`GET /message` / WS `/stream` 不按 token 过滤（任何 token 返回全局消息流，appid 全=1），安卓 gotify App 轮询/流式拉到全部 20 键的消息——第三方镜像 v1.4.2 无配置项、无源码，hooks 插件是入站 webhook 方向解决不了；④**修复=push-translator 三端口 :8003**：ACE 过滤代理（`universal-push-proxy.py` AceFilterHandler）——`GET /message` 代理+按标题过滤、WS `/stream` 101 握手转接+帧级过滤、`/application`/`/health` 透传、其余一律 404（admin API 不外露）。过滤规则=**只丢已知跨渠道标签**（`[bark_*] [telegram_*] [discord_*] [ha_bark/tgram/discord]`），[gotify_*]/[textverified]/[ha_android]/无前缀/旧广播时代标签（[nas]/[VPS] 等）全保留，安卓历史零误伤。验证：100→73 条（0 泄漏）、WS 实测 [gotify_nas] 帧到达 [bark_nas] 帧被滤、101 握手正常。**安卓 App 改连 `http://192.168.1.10:8003`（token 不变）**；若需蜂窝网访问需在路由器给 8003 加公网映射。⚠️ 8002 公网暴露=任何人可拉全部消息（token 随便填都过），建议关闭 8002 公网映射只留 3004 推送口
+- **H7 渠道分离收尾（2026-09-10 11:30，老大：ha_* 不需要、直接引用 device 四渠道；bark 只留一台 iPad；安卓串台处理）**：①`ha_android/ha_bark/ha_tgram/ha_discord` 四 cfg 删除、桥 routes 同步删（7 路：telegram_nas/btc/device/general + discord_nas/btc/device），HA 通知直接引用 `gotify_device/bark_device/telegram_device/discord_device`（地址定死，见 §4 HA 四渠道引用）；②未命名 bark 设备（uuid d694…，9/10 09:14 经公网 198.51.100.7 注册=老大 iPad 蜂窝网重注册）已删——10:40 全量巡检 7 条 bark 全走 ipad/brak 设备（✓apns 6127c36c），未命名设备零投递；③**Hotify gotify 兼容层缺陷**：`GET /message` / WS `/stream` 不按 token 过滤（任何 token 返回全局消息流，appid 全=1），安卓 gotify App 轮询/流式拉到全部 20 键的消息——第三方镜像 v1.4.2 无配置项、无源码，hooks 插件是入站 webhook 方向解决不了；④**修复=push-translator 三端口 :8003**：ACE 过滤代理（`universal-push-proxy.py` AceFilterHandler）——`GET /message` 代理+按标题过滤、WS `/stream` 101 握手转接+帧级过滤、`/application`/`/health` 透传、其余一律 404（admin API 不外露）。过滤规则=**只丢已知跨渠道标签**（`[bark_*] [telegram_*] [discord_*] [ha_bark/tgram/discord]`），[gotify_*]/[textverified]/[ha_android]/无前缀/旧广播时代标签（[nas]/[VPS] 等）全保留，安卓历史零误伤。验证：100→73 条（0 泄漏）、WS 实测 [gotify_nas] 帧到达 [bark_nas] 帧被滤、101 握手正常。**安卓 App 改连 `http://192.168.1.10:8003`（token 不变）**；若需蜂窝网访问需在路由器给 8003 加公网映射。⚠️ 8002 公网暴露=任何人可拉全部消息（token 随便填都过），建议关闭 8002 公网映射只留 3004 推送口
 - **8002 公网保留（老大决策，2026-09-10 12:00）**：外网设备（iPad Bark、安卓 gotify App）的接收地址=8002，蜂窝网访问必须公网映射，**不关**。已知代价=任意 token 可拉全部消息（Hotify 兼容层缺陷），接受。安卓内网走 :8003 过滤代理；蜂窝网若也要过滤，可给 8003 加公网映射、App 填 DDNS:8003（老大定）
 - **H8 安卓 gotify App 分频道图标（2026-09-10 13:51 部署，老大需求：分频道做图标）**：8003 代理将消息 appid 按标题标签改写——`[X_nas]`→101（NAS 蓝 N）、`[X_device]`→102（Device 绿 D）、`[X_btc]`→103（BTC 橙 B），其余=1（Hotify 紫 H 默认，codex/deepseek/general/horizon/textverified 键落此）；`/application` 返回本地合成 4 应用列表（各带 `image:"/icon/<img>.png"`，sortKey a1/a101/a102/a103），`/icon/*.png` 静态服务自 `/srv/push/apprise/icons/`（Cache-Control 86400s），WS 帧同步改写 appid。图标源=本地 `tools/icons/*.png`（System.Drawing 128×128 圆角方块+白字母）。App 图标缓存=装好后需杀掉重开 App 拉新应用列表。实测：/application 4 应用、/icon/nas.png 200、消息 appid 改写生效
-- **H8 bark 寄生注册断根（2026-09-10 14:23，根因=App 存死 key）**：iPad Bark App 蜂窝网（公网 203.0.113.10）冷启动自动 `GET /register`——App 存的服务器 URL key 失效即新建设备（今早 d694、13:42 7f76 两台寄生设备，App 里 URL 固定不可改）；且 iPad APNs token 已换新（devicetoken=feb2…5baf，旧 6127…为宽限期投递）。**接管方案（cfg 21 键零改动）**：删旧 brak 设备（6127…）→ iPad 切飞行模式触发 App 重注册（14:23 新 key `1e45…1f03`）→ **admin API 字段级编辑** `PUT /api/v1/devices/<uuid>/slug`（json `{"slug":"brak"}`，从 Hotify console 前端 JS 挖出；同类 `/name` `/sound` `/type` `/source`）设 slug=brak + name=ipad → 新设备无缝接管推送（✓apns 1e45 实证）。断根原理=App 存的 1e45 是活 key，冷启动认领不再新建。⚠️ 若 iPad 再出现寄生注册：先查 App URL 尾部 key 是否仍=1e45…，再按本条流程接管
+- **H8 bark 寄生注册断根（2026-09-10 14:23，根因=App 存死 key）**：iPad Bark App 蜂窝网（公网 198.51.100.7）冷启动自动 `GET /register`——App 存的服务器 URL key 失效即新建设备（今早 d694、13:42 7f76 两台寄生设备，App 里 URL 固定不可改）；且 iPad APNs token 已换新（devicetoken=feb2…5baf，旧 6127…为宽限期投递）。**接管方案（cfg 21 键零改动）**：删旧 brak 设备（6127…）→ iPad 切飞行模式触发 App 重注册（14:23 新 key `1e45…1f03`）→ **admin API 字段级编辑** `PUT /api/v1/devices/<uuid>/slug`（json `{"slug":"brak"}`，从 Hotify console 前端 JS 挖出；同类 `/name` `/sound` `/type` `/source`）设 slug=brak + name=ipad → 新设备无缝接管推送（✓apns 1e45 实证）。断根原理=App 存的 1e45 是活 key，冷启动认领不再新建。⚠️ 若 iPad 再出现寄生注册：先查 App URL 尾部 key 是否仍=1e45…，再按本条流程接管
 - **H9 正文修复：全链路正文字段错配（2026-09-11 08:46，老大报告 gotify 只有标题没内容）**：根因=Apprise `json://` 腿 POST 的 payload 是 `{"version","title","message","attachments","type"}`（正文在 **message**），而 Hotify 定向腿 `POST /<key或slug>` 是 bark 兼容入站只认 **body**（title+body，JSON/表单均可）——字段名不匹配，正文自 H6 起全部丢弃（昨日 21 键回归只核了标题+投递，未核正文）。排查中逐一排除的腿：`bark://`（Apprise 发 `{"title","body","device_key"}` 到 `/push`，Hotify `/push` 对任何 device_key 都 400）；`gotify://`（发 `{"title","message"}` 到 `/message?token=`，Hotify 该端点是**广播**语义——`[push] saved target_profile_id=0`+全部设备投递，不能当定向腿用，实测时曾把测试消息广播到 iPad/TG/DC）；`form://`（表单字段仍叫 message）。**修复=3005 重映射中继**（`universal-push-proxy.py` 第 4 监听口 RelayHandler）：收 apprise JSON/表单→`message`→`body` 重写→原样转发 `127.0.0.1:8002/<path+query>`（路径/分组/铃声参数透传），响应透传。21 cfg 腿 `json://…:8002/`→`json://…:3005/` 仅换端口（改动前备份 `backups/cfg-pre-relay-20260911.tar.gz`）；systemd ExecStart 加第 4 口 `3004 2999 8003 3005`。验证四端：安卓存储 `'[gotify_nas] K中继修复验证-安卓' msg='这是正文内容安卓应显示'`、iPad `✓apns 1e45`+`category=nas`（分组透传）、TG `[telegram] sent key=telegram_nas message_id=20807`、DC `[discord] sent key=discord_nas`。附带：Apprise json:// 的 `?-group=X&-sound=Y` 参数实测透传为目标 URL query（`/brak?group=X&sound=Y`），中继原样带过 ✓
 - **H9b bark 寄生注册复发（2026-09-11 08:24，H8 断根理论修正）**：iPad 又注册了新设备 `7d35…8cc1`（devicetoken 仍=feb2…5baf，与 1e45 同 token）——**且这次 App 存的 1e45 是活 key**，证明 H8 的「死 key 才触发重注册」不完整：Bark App 冷启动（蜂窝网）会重注册，与 key 死活无关。处置：7d35 无 slug 零投递，直接 DELETE（投递经 slug brak→1e45，devicetoken 相同 iPad 照常收到；E 测试曾双弹横幅=同 token 双设备的证据）。设备表已回 4 台（brak/tgram/discord/gotify）。**遗留**：寄生注册会随冷启动复发（每天一次量级），slug 接管保投递不受影响，但设备表会持续积垃圾——彻底断根需在 8002 前加 /register 拦截代理（固定返回 1e45），涉及公网口改造，待老大定夺（当前日常处置=见 7d35 类无 slug 设备就删）
 - **21 键全量回归（2026-09-10 14:38，老大要求每键一条带数字消息 No.01-21）**：**21/21 全绿零串台**（老大确认"这次完美了"）——iPad 8 条 ✓APNs（No.07-13 bark 7 键+No.21 广播）、安卓 6 条 WS+广播存史（No.01-06）、TG 4 条 message_id 20803-20806（No.14-17）、DC 3 条 sent（No.18-20）；textverified 广播=iPad ✓apns + 安卓存历史（App 关闭时无实时帧，开 App 可见）；TG/DC 桥经 WS 收到该帧但无 textverified 路由不转发——**TG/DC 实际收不到广播**（09-11 老大实测确认；pushkit "unknown platform windows" 为桥设备预期噪音）
@@ -233,7 +231,7 @@ cp /srv/push/apprise/backups/retired-legs-bridge-20260909/*.cfg /srv/push/appris
 | --- | --- |
 | 备份 | `push/apprise/backups/cfg-pre-mp-20260925-192934.tar.gz` |
 | 新增键 | `apprise/config/bark_mp.cfg`（复制 `bark_nas.cfg`，**仅把 Bark 分组 `-group=nas` 改为 `-group=mp`**，凭据部分未动）<br>`apprise/config/gotify_mp.cfg`（复制 `gotify_nas.cfg`，逐字节相同） |
-| 权限 | `nasuser:users` / `600`（与既有键一致） |
+| 权限 | `nasuser:Users` / `600`（与既有键一致） |
 | 是否重启 | **不需要** —— 2999 矩阵与文档页实时读 cfg |
 | 验证 | `GET :2999/matrix.json` 新增 `mp` 行，`gotify` 与 `bark` 均为 `ok: true` |
 
@@ -321,7 +319,7 @@ if dialect in ("wecom", "dingtalk"):
         _md_title = str(_md.get("title") or "").strip()
         text = ((_md_title + "\n" + _md_text).strip() if _md_text else _md_title)
 ```
-- 补丁前先备份：`apprise/universal-push-proxy.py.bak-20260925-195634`（已修正属主为 `nasuser:users`）
+- 补丁前先备份：`apprise/universal-push-proxy.py.bak-20260925-195634`（已修正属主为 `nasuser:Users`）
 - 语法校验：`python3 -m py_compile` 通过
 - 生效方式：`sudo systemctl restart push-translator` → `3004/health` 与 `2999/health` 均 `200 {"status":"ok"}`
 - **回滚**：`sudo cp <bak> universal-push-proxy.py && sudo systemctl restart push-translator`
@@ -360,7 +358,7 @@ key=bark_mp     route=iPad Bark（mp 分组）     title=沙丘 (2021) 已添加
 | --- | --- |
 | 备份 | `push/apprise/backups/cfg-pre-brainquant-20261001-200142.tar.gz`（整个 `config/`，1269 B） |
 | 新增键 | `apprise/config/bark_brainquant.cfg`（复制 `bark_nas.cfg`，**仅把 Bark 分组 `-group=nas` 改为 `-group=brainquant`**，其余含 `&-sound` 与凭据段逐字节未动）<br>`apprise/config/gotify_brainquant.cfg`（复制 `gotify_mp.cfg`，SHA-256 `3bddd75c9901e5d3d48824d517143d5ef14a654ffb9f3d1c07430927fab22dd1`，与既有 `gotify_nas/device/horizon/mp` 完全相同） |
-| 权限 | `nasuser:users` / `600`（与 `mp` 键一致） |
+| 权限 | `nasuser:Users` / `600`（与 `mp` 键一致） |
 | 是否重启 | **不需要** —— 2999 矩阵与文档页实时读 cfg |
 | 验证 | `GET :2999/matrix.json` 频道数 11 → **12**，新增 `brainquant` 行，`gotify` 与 `bark` 均 `ok: true` |
 
@@ -452,7 +450,7 @@ curl -X POST http://192.168.1.10:3004/notify/bark_nas -H 'Content-Type: applicat
 
 **当次验证**：① 无参数回归 `:3004/push/bark_brainquant` → `apprise_status 200`，`hotify.db` 记录 `ext={"group":"brainquant","sound":"bell",…}`（与修复前一致）；② 带 `level=passive` → `ext={"group":"brainquant","level":"passive","sound":"bell"}` + 日志 `✓ apns`；③ `POST /notify` JSON 分支同样落到 `ext.level=passive`；④ 四口（3004/2999/3005/8003）`/health` 全 200、2999 页面含新说明；⑤ 部署副本与仓库源码 SHA256 一致（`935172a8…`）。
 
-**部署与回退**：改动前备份 `universal-push-proxy.py.bak-20261006-174549`（原始 71,974 B / `483b0c8a…`）；部署方式 = scp 到 `/tmp` → `py_compile` → `sudo cp` + `chown nasuser:users` + `chmod 700` → `systemctl restart push-translator`。**回退** = 用该 `.bak` 覆盖回去 + 重启（一步）。
+**部署与回退**：改动前备份 `universal-push-proxy.py.bak-20261006-174549`（原始 71,974 B / `483b0c8a…`）；部署方式 = scp 到 `/tmp` → `py_compile` → `sudo cp` + `chown nasuser:Users` + `chmod 700` → `systemctl restart push-translator`。**回退** = 用该 `.bak` 覆盖回去 + 重启（一步）。
 
 **已知边界**：透传只对 **bark 腿**生效；iOS 的 passive 通知不进横幅属系统行为，不是投递失败；「看得见但不响」目前无解（除非在 iOS 设置里对 Bark App 整体关声音，那会影响全部 Bark 通知）。
 
@@ -500,3 +498,42 @@ curl -X POST http://192.168.1.10:3004/notify/bark_nas -H 'Content-Type: applicat
 - **「哪张卡收到的」加不了**：hideck 的通知上下文里没有卡/ICCID/卡名（v2.1.23 与最新 v2.1.29 变量表一致），`设备` 只是模组（`ec20-device4`）、`通道` 只是 蜂窝/VoWiFi。要这项只能给作者提 issue/PR。
 - **来电通知不重排**（没有「内容」行），保持原样。
 - 真实入向短信的最终排版属自然触发验证：下一条真实短信到达后读 `:2999/messages.json` 或看手机即可复核（与合成报文走同一代码路径）。
+
+---
+
+## 20. 2026-10-19 飞书出站腿（`feishu_*` × 12 频道）
+
+**需求**（用户 2026-10-19）：「帮我建群，然后新建一个飞书的推送渠道，所有频道都可以通过飞书推送」＋「推送的频道的信息里都要带上频道名」。
+
+**群**：飞书「通知中心」`oc_00000000000000000000000000000000`（普通群 `chat_mode=group`、群主=用户、机器人「小鲸」`cli_0000000000000000` 已在群）。
+
+**群定位：纯通知，不绑 DSH 工作区**（用户 2026-10-19 决定：「通知中心只通知不会话」）。机器人**必须留在群内**才能发文件/消息，而插件的 `groupResponseMode=all`（群内免 @ 即回）是**机器人级配置、不能按群关闭** ⇒ 运行规则就是**不要在该群发消息**；只要不发，这里永远不会产生会话。🈲 别对 `group:oc_8b26…` 发 `/conv`（也没有必要）。
+
+**为什么自建腿**：apprise 没有飞书插件；既有「飞书兼容 webhook」（`:3004/feishu/<key>`）是**入站方言**（别的系统以飞书格式推给我们），方向相反，不能复用。
+
+**链路**：
+
+```
+3004 /push/feishu_<频道>  →  apprise :8000（key=feishu_<频道>）
+   →  cfg 腿 json://192.168.1.10:3806/feishu_<频道>
+   →  代理第 5 口 FeishuOutHandler → open.feishu.cn /im/v1/messages（chat_id=通知中心）
+```
+
+**设计要点（都是踩过坑才定下来的）**：
+
+- **端口用 3806，不是 3006**：30xx 段被 docker publish 占满（实测 3006–3010 全是 `docker-proxy`）。首轮用 3006 直接把服务打成 `Address already in use` 崩溃重启，推送中断数十秒。**宿主代理端口要避开 docker 会发布的段。**
+- **腿里必须写宿主 LAN IP `192.168.1.10`**，不能写 `127.0.0.1`：apprise 容器 `net=clash`（与另一容器共享 netns），`127.0.0.1` 打到的是容器自己。
+- **凭据** `/srv/push/feishu.env`（0600，nasuser）：`FEISHU_APP_ID` / `FEISHU_APP_SECRET`（小鲸应用）/ `FEISHU_CHAT_ID` / `FEISHU_GROUP_NAME`。token 进程内缓存、到期前 60s 刷新。
+- **标题格式**：首行固定 `[频道: <频道>] <标题>`；3004 自动加的 `[feishu_xxx]` 前缀会被剥掉，避免重复。
+- **12 个键**（沿用 H6「一键=一渠道」）：`feishu_nas` / `_btc` / `_device` / `_horizon` / `_codex` / `_deepseek` / `_general` / `_textverified` / `_brainquant` / `_kefu` / `_mp` / `_sms`。2999 矩阵新增 **feishu 列**（表头「飞书群 通知中心」），点格子取推送地址。
+
+**验收（2026-10-19 15:26）**：12 键经 `:3004` 实推 ⇒ 群里 12 条、`[频道: X]` 逐一正确；`:2999/matrix.json` 的 feishu 列 **12/12 ✓**；既有 bark/gotify/telegram/discord/imessage 五列零变化；五口 `/health` 全 200。
+
+**⚠️ 两个坑（都真的踩了，排错先看这两条）**：
+
+1. **未知 key 会「静默成功」**：`POST :8000/notify/<不存在的 key>` 返回 **204 且无报错**（不是 404）。所以「12 个请求都 204」**不能**当作投递成功——必须看 apprise 日志有没有 `Delivered Notification(s) - KEY: feishu_xxx`，或代理日志有没有 `[feishu] sent channel=…`。正常的键返回的是 **200 + 141 字节**。
+2. **cfg 必须落在 `apprise/config/`**：放到上层 `apprise/` 时，矩阵（读 `config/`）与容器（挂 `config/`）都看不见，表现同样是「推送 204、群里没消息」。
+
+**apprise 热加载**：新增 cfg 键**无需重启 apprise 容器**（实测放入 `config/` 后第一次请求即生效，日志 `Delivered Notification(s) - KEY: feishu_nas`）。
+
+**回退**：`apprise/universal-push-proxy.py.bak-20261019-1530`、`/etc/systemd/system/push-translator.service.bak-20261019-1530`、`backups/cfg-pre-feishu-20261019-1530.tar.gz`。回退 = 覆盖源码 + `sed` 去掉 ExecStart 末尾的 `3806` + `daemon-reload && restart`（12 个 feishu 键随之失效，其余列不受影响）。
