@@ -23,6 +23,12 @@ Slack、SMTP 邮件、Matrix、ntfy、PushDeer、Pushover、Twilio 短信、Page
 
 ---
 
+## iPhone 通知转发：Mac 控制与现有推送栈接线
+
+新增 [Mac 控制 iPhone 与短信、App 通知转发全流程](docs/Mac控制iPhone与通知转发全流程.md)，涵盖 SSH/USB 控制、设备版本实测、快捷指令的 App + 正文变量、URL 编码、Apprise/安卓/飞书路由及锁屏验收；附 [标准库 MCP 客户端](extras/iphone/mcpc.py)。
+
+这条链路在手机上捕获通知，与下面的 Linux iMessage 出站链路分别配置。根 Compose **尚未包含文中生产 `/p/` 手机翻译入口**，手册明确列出已有服务依赖、已验证结果和未完成的全 App 覆盖，不是全新环境一键安装包。
+
 ## 一、解决什么痛点
 
 | # | 痛点 | 常见做法 | 本项目怎么做 |
