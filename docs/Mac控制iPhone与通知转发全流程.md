@@ -67,17 +67,46 @@ $HOME/.local/bin/iphone-control --version
 
 ### 4.1 安装与发现设备
 
-本次 Intel Mac 从源码构建 iphone-control；Apple Silicon 可使用上游对应版本的发布包。源码构建需 Rust/Cargo 和该版本要求的构建工具，标签应先在上游发布页核实。
+本次 Intel Mac 从源码构建 iphone-control；Intel 没有对应预编译包，别直接照抄 Apple Silicon 的下载地址。以下按已核对的 [v0.2.7 源码构建说明](https://github.com/Derrors/iphone-control/blob/v0.2.7/website/deploy/source.md) 固定版本，构建要求 Rust 1.89+ 和 C 编译器。编译和首次设置以普通用户进行，daemon、MCP 和命令行使用同一用户。
 
 ```bash
-# 以下在 Mac 执行；进入已核对版本的源码目录
-cargo build --release
+# 以下在 Mac 执行。若尚无 Command Line Tools，先安装并等待系统对话框完成
+xcode-select --install
+xcode-select -p
+# 若尚无 Rust，按 https://rustup.rs 安装；当前终端加载 Cargo 环境
+. "$HOME/.cargo/env"
+rustc --version
+cargo --version
+
+git clone --branch v0.2.7 --depth 1 https://github.com/Derrors/iphone-control.git
+cd iphone-control
+cargo install --path apps/iphone-control --locked
+# 上游 cargo install 默认装在 ~/.cargo/bin；统一到本文的固定入口
 mkdir -p "$HOME/.local/bin"
-install -m 755 target/release/iphone-control "$HOME/.local/bin/iphone-control"
+install -m 755 "$HOME/.cargo/bin/iphone-control" "$HOME/.local/bin/iphone-control"
 $HOME/.local/bin/iphone-control --version
+```
+
+Apple Silicon 可改用 [v0.2.7 安装说明](https://github.com/Derrors/iphone-control/blob/v0.2.7/website/guide/getting-started.md) 中的签名安装器；需要 Python 3 和 OpenSSL 3。先下载并检查安装器，再固定版本执行：
+
+```bash
+curl -fsSLo iphone-control-install.sh https://github.com/Derrors/iphone-control/releases/download/v0.2.7/install.sh
+sh iphone-control-install.sh --version v0.2.7
+$HOME/.local/bin/iphone-control --version
+```
+
+接上能传数据的 USB 线，在 Mac 终端交互运行（从 Windows 进入时使用 `ssh -t mac`）：
+
+```bash
+$HOME/.local/bin/iphone-control
 $HOME/.local/bin/iphone-control devices
+$HOME/.local/bin/iphone-control status
 $HOME/.local/bin/iphone-control doctor
 ```
+
+依次完成语言、按需配置代理、用户后台服务、手机解锁与“信任此电脑”、开发者模式重启确认。iOS 27+ 引导跳过 Apple ID 和 WDA；旧系统走第 4.4 节。已经完成的步骤会跳过，可用 `setup --reconfigure` 重设特定项目。可选自动解锁由设备所有者自行决定，本手册不要求开启。
+
+首次合格判据：`devices` 能列出目标设备，`status` 报告预期控制方式，`doctor` 中 USB/配对/控制相关项通过。只看到 USB 设备不算屏幕控制验收。设置位于 `~/.config/iphone-control/env`，设备状态位于 `~/.local/share/iphone-control`；后者可能含登录会话、签名及可选解锁资料，应留在私有维护环境。
 
 本次已核实的客户端位置是 `/tmp/mcpc.py`、批量补选脚本 `/tmp/addapps.py`、旧 WDA 客户端 `/tmp/w.py`。这些是临时目录文件，不保证重启后保留；没有核实它们已安装在 `~/.local/bin/`。本仓库同时提供可移植的 [MCP 命令行客户端](https://github.com/ksoulness/nas-push-stack/blob/main/extras/iphone/mcpc.py)，可显式安装后使用下文命令。
 
@@ -127,6 +156,39 @@ ssh mac 'python3 /tmp/mcpc.py call iphone_swipe "{\"from_x\":188,\"from_y\":520,
 
 本次旧系统依赖 `iphone-control login` → `sign` → WDA，曾成功签发安装。免费描述文件到期需重签；实际天数读工具输出。升级后 native 已使用成功，WDA 不再是本次原生控制的必需依赖，也无需为这条路线安装 Xcode 模拟器平台。其他版本的要求以工具诊断为准。
 
+旧系统从零配置时，优先执行交互引导；需要单独恢复签名时再用以下命令：
+
+```bash
+$HOME/.local/bin/iphone-control login
+$HOME/.local/bin/iphone-control sign
+$HOME/.local/bin/iphone-control status
+$HOME/.local/bin/iphone-control doctor
+# 仅在描述文件将过期、且仍走 WDA 时重签
+$HOME/.local/bin/iphone-control resign
+```
+
+1. 在交互终端输入开发者 Apple ID、密码及双重认证码，勿把密码写进命令参数或日志。
+2. 手机保持解锁；依提示在“设置 → 通用 → VPN 与设备管理”中信任对应开发者，信任时需要联网。
+3. 开启开发者模式后按要求重启、解锁并确认；出现 XCTest/UI Automation 密码提示时由本人在手机完成。
+4. 以 `status` 显示 WDA 就绪、可读控件树和截图为准；安装图标出现只是中间步骤。首次启动失败先看 `doctor` 的具体层级，不要同时启动旧版 WDA 脚本和新 daemon 争抢设备。
+5. 重启后的密码提示、到期重签和 USB 重插恢复另行验收。不要将约 7 天免费签名描述文件写成永久授权。
+
+### 4.5 后台服务、日志与 AX 超时恢复
+
+由设置引导安装了用户服务时，用服务命令维护，勿另开第 4.2 节的临时 daemon：
+
+```bash
+$HOME/.local/bin/iphone-control service status
+$HOME/.local/bin/iphone-control status
+$HOME/.local/bin/iphone-control doctor
+# 检查 USB、信任与人工解锁后，确需恢复时再执行
+$HOME/.local/bin/iphone-control service restart
+```
+
+手工 `nohup` 模式的日志在 `/tmp/ictl-daemon.log`；用户服务日志位置以 `status`/`doctor` 和该版本服务配置为准。修改代理后要让实际 daemon 重新读取配置。保留错误时间、版本、控制方式和失败层级，分享日志前去除正文、验证码和令牌。
+
+对“连接无障碍服务（8 秒）”按顺序排查：手机当前是否解锁 → USB 是否稳定且已信任 → `devices` 是否选中正确设备 → `doctor` 是否仅 AX 层失败 → 检查是否有重复进程 → 必要时重启所属服务并重新读树。若仍失败，记录为控制通道待修复；已保存的手机自动化独立验证。此步骤是恢复操作说明，本次补文档未执行手机重启或 AX 修复。
+
 ## 5. 推送容器、入口与方向键
 
 | 组件 | 本次 NAS 位置 | 职责 |
@@ -152,6 +214,37 @@ ssh mac 'python3 /tmp/mcpc.py call iphone_swipe "{\"from_x\":188,\"from_y\":520,
 循环取决于完整路由：如监听 iPhone Bark，又将该消息投回同一个 Bark，会再次触发。当前 `ios2and` 没有 Bark 腿；增改方向键时重新核对源 App、出口和其他设备的二次转发规则。
 
 曾为 Gotify 登录制作 nginx `/session`、`/client` 静态兼容响应并接受任意 Basic 头，再注入固定设备 token。这只是历史兼容方案，**不是有效的用户名/密码认证，会扩大消息读取权限**。公开文档不附这份生产配置，不把“任意用户名密码”作为公网接入教程。公网接收端应使用真实账号鉴权或受限网络入口。
+
+### 5.1 先配出口，再连接手机
+
+已有推送栈按以下顺序接线。每一步用最终接收端回读验证，勿用控制台显示“成功”替代正文验收：
+
+1. 在安卓接收端完成服务地址与真实账户鉴权，允许通知和后台运行；确认 WebSocket 在线。服务端配置对应设备的投递目标，设备 token 保留在私有配置。
+2. 在 Apprise 的 `ios2and` 配置中挂安卓目标与飞书出站腿。飞书应用机器人需加入目标群、具备发消息权限，`FEISHU_CHAT_ROUTES` 中频道名与入口目标一致。正文标签由 `FEISHU_CHANNEL_LABEL` 控制。
+3. 若需要安卓 → iOS，在 `and2ios` 配置中只挂预期的 Bark 设备；本次实际是 iPad。先让 Bark 单独收到一条测试，再接安卓来源。
+4. 配好 HTTPS 和 `/p/<MOBILE_TOKEN>/<key>` 翻译入口。`ios2and` 与 `and2ios` 是方向键；填成 `ntf` 广播键可能把消息送回来源。
+5. 用第 8.1 节请求验收服务端，再开始配置手机。此顺序能把“服务端未就绪”与“手机变量连接错误”分开定位。
+
+本仓库不附生产翻译器，也不附现网设备 token、飞书应用凭据或完整私有配置。全新环境部署者需对照第 6 节实现入口契约并准备上述依赖；这里的接线步骤不代表根 Compose 已包含这些模块。
+
+### 5.2 安卓 → iOS 的反向通知配置
+
+以下是与当前方向键一致的配置模板，适用于 MacroDroid 一类有“收到通知”触发器和 HTTP 动作的工具；具体变量名称按手机上的工具版本选择。历史曾用 `/wecom/and2ios`，新配置优先用统一的带令牌手机入口。
+
+1. 授予自动化工具“通知使用权”、联网和必要的后台权限；触发器选需要转发的来源 App，先只选一个进行验证。
+2. 明确排除 Gotify/Hotify/Bark 等接收端及自动化工具自己的运行通知。若其他设备也转发这些来源，检查整条路径，避免跨设备循环。
+3. HTTP 动作设为 POST，URL 为 `https://<PUSH_HOST>/p/<MOBILE_TOKEN>/and2ios`；使用工具的 JSON 请求体编辑器，`Content-Type: application/json`。
+4. `title` 填来源 App 与通知标题，`body` 填通知正文，变量必须通过工具的变量选择器插入。多行、双引号和反斜杠交给 JSON 序列化处理，勿直接拼出破损的 JSON 字符串。
+5. 从另一设备产生一条新通知，核对 HTTP 状态、入口日志与 iPad Bark 的正文。再验证后台、省电与自然锁屏；这些安卓侧新配置步骤本次未重新实机验收。
+
+```json
+{
+  "title": "<APP_NAME> · <NOTIFICATION_TITLE>",
+  "body": "<NOTIFICATION_BODY>"
+}
+```
+
+以上尖括号是工具变量的语义占位，不能原样保存。客户端若支持有限重试，只对网络错误与 5xx 使用退避；429 应降速，403 检查令牌，400 检查正文。当前入口不保证来源端重试去重，应在来源侧过滤重复通知，勿对所有状态无上限重发。
 
 ## 6. 手机入口契约与服务端解析
 
@@ -224,7 +317,54 @@ https://<PUSH_HOST>/p/<MOBILE_TOKEN>/ios2and?body=[URL 编码后的文本]
 
 编辑器“简介/详细信息 → 隐私”检查锁定时允许运行；首次运行完成域名网络授权；返回列表确认自动化开关打开。手动播放可能没有通知输入，收到默认文案属于服务端兜底，并非正文验收。
 
+### 7.6 补齐 App 清单，避免把字典当覆盖率
+
+先建立手机来源清单，再编辑通知触发器：记录“App 显示名、触发器已选、解锁实测、自然锁屏实测、正文是否完整、最后测试时间”。每补一批保存并返回列表，重新进入核对选择仍然存在。服务端解析字典与手机触发器清单各自维护，新增字典不等于新增监听。
+
+长列表先滚动到实际的添加入口，再按当前控件树或截图选择；历史 `/tmp/addapps.py` 依赖编辑器在前台、添加按钮可见，未随仓库分发，也不是通用安装依赖。不要直接运行未知状态的批处理或照抄历史点击坐标。手机卸载重装 App、升级系统或重建自动化后，应重新核对清单。
+
+自动化只捕获系统实际发出的通知，不是读取各 App 的聊天数据库。将希望覆盖的 App 全选后，还需逐项产生真实通知；只有收到带来源与全文的最终消息，才将对应格标记通过。
+
 ## 8. 验收、定位与维护
+
+### 8.1 先验证 HTTP 入口
+
+在自己的维护终端设置 `PUSH_BASE=https://<PUSH_HOST>` 和 `MOBILE_TOKEN`；令牌从私有配置载入，不回显。以下命令会产生真实测试推送，使用不含个人信息的测试正文。先确认对应方向键已配置。
+
+```bash
+# GET：只对 body 编码，中文、空格和换行都应保留
+curl --silent --show-error --fail-with-body --get \
+  "$PUSH_BASE/p/$MOBILE_TOKEN/ios2and" \
+  --data-urlencode 'body=信息[EXAMPLE] 完整正文 test 123' \
+  --write-out '\nHTTP %{http_code}\n'
+
+# POST：正文为合法 JSON；不要对 JSON 整体再做 URL 编码
+curl --silent --show-error --fail-with-body \
+  "$PUSH_BASE/p/$MOBILE_TOKEN/ios2and" \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"title":"入口验收","body":"中文、空格、换行\n第二行 test 123"}' \
+  --write-out '\nHTTP %{http_code}\n'
+```
+
+这两个请求验证服务端，不验证 iPhone 触发器。分享结果时只保留状态码、正文长度和脱敏的接收结果；勿分享带令牌的完整 curl 命令。对 403 核对令牌来源与缓存生效时间；对 400 检查字段/正文；对 429 降低发送速率。测试长正文时单独比对字符数与换行，GET 成功不代表更长 URL 也能通过。
+
+### 8.2 真实通知与锁屏验收表
+
+| 场景 | 操作与应核对的证据 | 当前证据状态 |
+| --- | --- | --- |
+| 服务端基础链路 | HTTP 测试 → `[mobile]` 长度 → Apprise → 安卓/飞书全文 | 历史已通过 |
+| 真实短信、自然锁屏 | 新短信产生系统通知，接收端回读完整正文 | 历史已通过，非本次重测 |
+| 微信/邮件/其余 App | 每个 App 单独发新通知，核对来源与全文 | 待逐项补录 |
+| App 前台、后台 | 分别确认是否产生系统通知事件及触发 | 待逐项验证 |
+| 隐藏预览/专注/摘要 | 记录通知到达时间、触发时间与变量内容 | 待验证 |
+| 断网后恢复 | 记录离线通知是否补发、是否丢失或重复 | 待验证，无补发保证 |
+| 重启/USB 拔出/Mac 休眠 | 核验手机已保存自动化是否继续投递 | 待专项验证 |
+| 长正文、引号、中文、多行 | 接收端逐字比对，记录是否截断或乱码 | 待扩展验证 |
+| 反向与循环 | 安卓来源 → iPad，确认不回投来源且无重复洪泛 | 待重新实机验收 |
+
+验收时间与测试 App 应逐项填写，不能将一条短信成功推广成所有 App 全量通过。本次文档补全没有新增这些场景的实机通过记录。
+
+### 8.3 分层排错
 
 按依赖分层验证：
 
