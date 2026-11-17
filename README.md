@@ -29,6 +29,8 @@ Slack、SMTP 邮件、Matrix、ntfy、PushDeer、Pushover、Twilio 短信、Page
 
 这条链路在手机上捕获通知，与下面的 Linux iMessage 出站链路分别配置。根 Compose **尚未包含文中生产 `/p/` 手机翻译入口**，手册明确列出已有服务依赖、已验证结果和未完成的全 App 覆盖，不是全新环境一键安装包。
 
+**2026-11-17 定稿**：iOS 27 起改走 `iphone-control` 的原生 CoreDevice 通道（不再需要 Xcode / WDA / 常开 Mac，收工后开发者模式关闭、Mac 关机）；手机端捷径固定为「通知触发器（41 个 App）→ 文本 = `[通知›App][通知]` → URL 编码 → 获取网页内容 GET `/p/<token>/ios2and?body=…`」；服务端新增 **NAS 侧 App 放行/屏蔽**（`mobile-app-allow.txt` / `mobile-app-block.txt`：白名单模式、屏蔽优先、未识别 App 放行、原名与别名都参与匹配、60 秒热生效）。详见 [iOS 通知转发·最终形态与 NAS 侧放行屏蔽](docs/iOS通知转发-最终形态与NAS侧过滤.md)。
+
 ## 一、解决什么痛点
 
 | # | 痛点 | 常见做法 | 本项目怎么做 |
