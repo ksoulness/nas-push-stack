@@ -23,7 +23,7 @@
 | 其它 handle | `other@example.com` |
 | 收件目标 | `recipient@example.com` |
 | 手机号 | `+15550100` / `+1 555 0100` |
-| 内网地址 | `192.168.1.x` |
+| 内网地址 | `192.0.2.x` / `198.51.100.x` |
 | 容器内/宿主路径 | `/srv/push...` |
 | 主机名 / 用户名 | `nas` / `mac` / `macuser` |
 | Mac 机型与构建号 | `MacModelX,1` / `00A000` |
